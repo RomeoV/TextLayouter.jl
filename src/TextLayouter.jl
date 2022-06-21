@@ -24,27 +24,34 @@ function layout_text(text, row_width; print_summary=false)
 
   @constraint(m, rows .≤ rows_max)
   @constraint(m, gaps .≤ gaps_max)
+
+  # try to have similar gaps adjacent to each other, not "a b     c".
   @constraint(m, diff(gaps) .≤ gap_difference)
   @constraint(m, .-diff(gaps) .≤ gap_difference)
 
   @constraint(m, cols[1] == 1)
   @constraint(m, rows[1] == 1)
+  
+  # tokens fit into line
   @constraint(m, cols .+ widths[:] .- 1 .≤ row_width)
 
   for i in 1:(N-1)
     @constraint(m, rows[i] ≤ rows[i+1])
+    # token coordinates + gaps sum up between adjacent tokens
     @constraint(m,    rows[i  ]*row_width + cols[i  ] + widths[i] - 1 + gaps[i] + 1
                    == rows[i+1]*row_width + cols[i+1])
   end
 
   # we suppress warnings about converting == to >= && <=
   @suppress_err for i in 1:(N-1)
+    # choice 1: tokens (i) and (i+1) on the same line
     c1 = @constraints(m,
       begin
         rows[i] == rows[i+1]
         gaps[i] ≥ gap_min
       end
     )
+    # choice 2: token (i+1) is on the next line
     c2 = @constraints(m,
       begin
         rows[i] == rows[i+1] - 1
@@ -56,7 +63,11 @@ function layout_text(text, row_width; print_summary=false)
     add_disjunction!(m, c1, c2, reformulation=:hull, name=Symbol("Y$i"))
   end
 
+  # recall that `rows_max` dominates all row assignments.
+  # therefore we can minimize this and maintain a linear formulation,
+  # instead of using the `max` operator. Same goes for `gaps_max`.
   @objective(m, Min, rows_max + gaps_max + sum(gap_difference)/(10*N))
+
   # set_optimizer_attribute(m, "parallel", "on")  # this doesn't seem to do anything...
   optimize!(m)
   cols = round.(Int, value.(cols))
@@ -66,7 +77,6 @@ function layout_text(text, row_width; print_summary=false)
   if print_summary
     println(solution_summary(m))
   end
-
   return tokens, rows, gaps
 end
 
@@ -84,7 +94,8 @@ function display_solution(tokens, rows, gaps, row_width; print_width=false)
   end
 end
 
-"Uses a simple heuristic to find an initial solution."
+"Uses a simple heuristic to find an initial solution.
+This can be fed to speed up the algorithms, but currently that doesn't work."
 function heuristic(tokens, row_width)
   N = length(tokens)
   widths = length.(tokens)
@@ -115,7 +126,6 @@ function heuristic(tokens, row_width)
 end
 
 "Sets the initial heuristic solution as a feasible solution in the model.
-
 This should get a fast upper bound. Unfortunately, the solver doesn't seem to
 use this. Perhaps this is because we don't set all the variables that get
 generated from the `add_disjunct` function."
